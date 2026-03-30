@@ -1,0 +1,88 @@
+
+#include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_BMP5xx.h>
+#include <LittleFS.h>
+
+Adafruit_BMP5xx bmp;
+
+const char* LOG_FILE     = "/data_log.txt";
+const int   SAMPLE_COUNT = 200;
+const int   SAMPLE_DELAY = 1000; // ms
+
+void setup() {
+    Serial.begin(115200);
+    delay(5000);
+
+    // I2C on GP0 (SDA) and GP1 (SCL)
+    Wire.setSDA(0);
+    Wire.setSCL(1);
+    Wire.begin();
+
+    // Correct method name is begin(), not begin_I2C()
+    if (!bmp.begin(0x47, &Wire)) {
+        Serial.println("BMP581 not found. Check wiring and I2C address.");
+        while (1) delay(100);
+    }
+    Serial.println("BMP581 found.");
+
+    // Correct enum prefix is BMP5XX_ not BMP5_
+    bmp.setTemperatureOversampling(BMP5XX_OVERSAMPLING_2X);
+    bmp.setPressureOversampling(BMP5XX_OVERSAMPLING_4X);
+    bmp.setIIRFilterCoeff(BMP5XX_IIR_FILTER_COEFF_3);
+    bmp.setOutputDataRate(BMP5XX_ODR_50_HZ);
+
+    // Mount filesystem
+    if (!LittleFS.begin()) {
+        Serial.println("LittleFS mount failed.");
+        while (1) delay(100);
+    }
+    Serial.println("Filesystem mounted.");
+
+    // Write CSV header
+    File f = LittleFS.open(LOG_FILE, "w");
+    if (!f) {
+        Serial.println("Failed to open log file.");
+        while (1) delay(100);
+    }
+    f.println("timestamp_ms,pressure_hPa,temperature_C,altitude_m");
+    f.close();
+
+    Serial.println("Logging started...");
+}
+
+void loop() {
+    static int count = 0;
+
+    if (count >= SAMPLE_COUNT) {
+        Serial.println("Logging complete.");
+        while (1) delay(1000);
+    }
+
+    // performReading() must be called before accessing any values
+    if (!bmp.performReading()) {
+        Serial.println("Failed to read sensor, skipping.");
+        delay(SAMPLE_DELAY);
+        return;
+    }
+
+    float temperature = bmp.temperature;           // degrees C
+    float pressure    = bmp.pressure;              // hPa
+    float altitude    = bmp.readAltitude(1013.25); // meters, standard sea level
+    unsigned long ts  = millis();
+
+    // Append row to file
+    File f = LittleFS.open(LOG_FILE, "a");
+    if (f) {
+        f.printf("%lu,%.2f,%.2f,%.2f\n", ts, pressure, temperature, altitude);
+        f.close();
+    } else {
+        Serial.println("Warning: could not open log file.");
+    }
+
+    Serial.printf("[%d/%d] P=%.2f hPa  T=%.2f C  Alt=%.1f m\n",
+                  count + 1, SAMPLE_COUNT, pressure, temperature, altitude);
+
+    count++;
+    delay(SAMPLE_DELAY);
+}
